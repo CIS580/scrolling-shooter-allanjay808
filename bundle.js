@@ -6,22 +6,100 @@ const Game = require('./game');
 const Vector = require('./vector');
 const Camera = require('./camera');
 const Player = require('./player');
+const Enemy = require('./enemy');
+const PowerUp = require('./powerup');
 const BulletPool = require('./bullet_pool');
-
+const Hud = require('./hud.js');
 
 /* Global variables */
 var canvas = document.getElementById('screen');
-var game = new Game(canvas, update, render);
-var input = {
-  up: false,
-  down: false,
-  left: false,
-  right: false
+var game;
+var input;
+var camera;
+var bullets;
+var missiles;
+var player;
+var enemies;
+var powerups;
+var level;
+var score;
+var health;
+var hud;
+var backgrounds;
+var foregrounds;
+var overgrounds;
+var gameOver = false;
+var gameWon = false;
+var transitionState = false;
+var enemyBullets;
+var enemyTimer;
+var powerupTimer;
+var spawnedEnemy;
+var spawnedPowerup;
+
+/**
+  * @function initialize
+  * Creates all the game objects on beginning and on restart of game
+  */
+function initialize() {
+  game = new Game(canvas, update, render);
+  hud = new Hud();
+  camera = new Camera(canvas);
+  bullets = new BulletPool(10);
+  missiles = [];
+  player = new Player(bullets, missiles);
+  enemies = [];
+  powerups = [];
+
+  score = 0;
+  health = 5;
+  level = 0;
+
+  input = {
+    up: false,
+    down: false,
+    left: false,
+    right: false
+  }
+
+  // Ground
+  backgrounds = [
+    new Image(),
+    new Image(),
+    new Image()
+  ];
+  backgrounds[0].src = "assets/level1.png";
+  backgrounds[1].src = "assets/level2.png";
+  backgrounds[2].src = "assets/level3.png";
+
+  // Clouds
+  foregrounds = [
+    new Image(),
+    new Image(),
+    new Image()
+  ];
+  foregrounds[0].src = "assets/cloud1.png";
+  foregrounds[1].src = "assets/cloud2.png";
+  foregrounds[2].src = "assets/cloud3.png";
+
+  // Dark Clouds
+  overgrounds = [
+    new Image(),
+    new Image(),
+    new Image()
+  ];
+  overgrounds[0].src = "assets/dark_cloud1.png";
+  overgrounds[1].src = "assets/dark_cloud2.png";
+  overgrounds[2].src = "assets/dark_cloud3.png";
+
+  enemyBullets = [];
+
+  enemyTimer = 3000;
+  powerupTimer = 5000;
+
+  spawnedEnemy = false;
 }
-var camera = new Camera(canvas);
-var bullets = new BulletPool(10);
-var missiles = [];
-var player = new Player(bullets, missiles);
+initialize();
 
 /**
  * @function onkeydown
@@ -48,6 +126,28 @@ window.onkeydown = function(event) {
     case "d":
       input.right = true;
       event.preventDefault();
+      break;
+  }
+
+  switch (event.keyCode) {
+    case 13:
+      if (gameOver || gameWon) {
+        gameOver = false;
+        gameWon = false;
+        initialize();
+      }
+      break;
+    case 80:
+      if (game.paused) {
+        game.pause(false);
+      } else game.pause(true);
+      break;
+    case 32:
+      event.preventDefault();
+      player.fireBullet({x: 0, y: -player.position.y});
+      break;
+    // DEBUG
+    case 8: // BACKSPACE
       break;
   }
 }
@@ -87,7 +187,11 @@ window.onkeyup = function(event) {
  * @param {DOMHighResTimeStamp} timestamp the current time
  */
 var masterLoop = function(timestamp) {
-  game.loop(timestamp);
+  if (!gameOver && !gameWon) {
+    setTimeout(function() {
+      game.loop(timestamp);
+    }, 1000/16);
+  }
   window.requestAnimationFrame(masterLoop);
 }
 masterLoop(performance.now());
@@ -102,17 +206,55 @@ masterLoop(performance.now());
  */
 function update(elapsedTime) {
 
+  if (gameOver || gameWon) return;
+
+  if (spawnedEnemy == false) {
+    setTimeout(function() {
+      console.log("spawning enemy");
+      var eBullets = new BulletPool(10);
+      enemyBullets.push(eBullets);
+      enemies.push(new Enemy(eBullets, player.position));
+      spawnedEnemy = false;
+    }, enemyTimer);
+    spawnedEnemy = true;
+  }
+
+  // If player reaches end of map level, advance game
+  if (player.position.y < 2) {
+    level++;
+    score += health * 1000;
+    if (level == 3) {
+      gameWon = true;
+      return;
+    }
+    player.position.y = 5400;
+    game.pause(true);
+    transitionState = true;
+  }
+
   // update the player
   player.update(elapsedTime, input);
 
   // update the camera
   camera.update(player.position);
 
+  enemies.forEach(function(enemy) {
+    enemy.update();
+    enemy.fireBullet();
+  });
+
   // Update bullets
   bullets.update(elapsedTime, function(bullet){
     if(!camera.onScreen(bullet)) return true;
     return false;
   });
+  enemyBullets.forEach(function(eBullets) {
+    eBullets.update(elapsedTime, function(bullet){
+      if(!camera.onScreen(bullet)) return true;
+      return false;
+    });
+  });
+
 
   // Update missiles
   var markedForRemoval = [];
@@ -125,6 +267,10 @@ function update(elapsedTime) {
   markedForRemoval.forEach(function(index){
     missiles.splice(index, 1);
   });
+
+  if (health == 0) {
+    gameOver = true;
+  }
 }
 
 /**
@@ -135,10 +281,8 @@ function update(elapsedTime) {
   * @param {CanvasRenderingContext2D} ctx the context to render to
   */
 function render(elapsedTime, ctx) {
-  ctx.fillStyle = "black";
-  ctx.fillRect(0, 0, 1024, 786);
 
-  // TODO: Render background
+  renderBackgrounds(elapsedTime, ctx);
 
   // Transform the coordinate system using
   // the camera position BEFORE rendering
@@ -153,6 +297,8 @@ function render(elapsedTime, ctx) {
   // Render the GUI without transforming the
   // coordinate system
   renderGUI(elapsedTime, ctx);
+
+  renderHud(ctx);
 }
 
 /**
@@ -165,6 +311,9 @@ function render(elapsedTime, ctx) {
 function renderWorld(elapsedTime, ctx) {
     // Render the bullets
     bullets.render(elapsedTime, ctx);
+    enemyBullets.forEach(function(eBullets) {
+      eBullets.render(elapsedTime, ctx);
+    });
 
     // Render the missiles
     missiles.forEach(function(missile) {
@@ -173,6 +322,39 @@ function renderWorld(elapsedTime, ctx) {
 
     // Render the player
     player.render(elapsedTime, ctx);
+
+    enemies.forEach(function(enemy) {
+      enemy.render(ctx);
+    });
+}
+
+/**
+  * @function renderBackgrounds
+  * Renders the parallax scrolling backgrounds.
+  * @param {DOMHighResTimeStamp} elapsedTime
+  * @param {CanvasRenderingContext2D} ctx the context to render to
+  */
+function renderBackgrounds(elapsedTime, ctx) {
+
+  if (level < 3) {
+    // The background scrolls at 50% of the foreground speed
+    ctx.save();
+    ctx.translate(0, -camera.y * 0.5);
+    ctx.drawImage(backgrounds[level], 0, 0);
+    ctx.restore();
+
+    // The foreground scrolls in sync with the camera
+    ctx.save();
+    ctx.translate(0, -camera.y);
+    ctx.drawImage(foregrounds[level], 0, 0);
+    ctx.restore();
+
+    // The overground scrolls in sync with the camera
+    ctx.save();
+    ctx.translate(0, -camera.y * 1.5);
+    ctx.drawImage(overgrounds[level], 0, 0);
+    ctx.restore();
+  }
 }
 
 /**
@@ -182,10 +364,42 @@ function renderWorld(elapsedTime, ctx) {
   * @param {CanvasRenderingContext2D} ctx
   */
 function renderGUI(elapsedTime, ctx) {
-  // TODO: Render the GUI
+  hud.displayGUI(ctx, player.position);
 }
 
-},{"./bullet_pool":2,"./camera":3,"./game":4,"./player":6,"./vector":8}],2:[function(require,module,exports){
+/**
+  * @function renderHud
+  * Renders the Hud
+  * @param {CanvasRenderingContext2D} ctx the context to render to
+  */
+function renderHud(ctx) {
+  hud.displayHud(ctx);
+  hud.displayScore(ctx, score);
+  hud.displayLevel(ctx, level);
+  hud.displayHealth(ctx, health);
+
+  if (game.paused) {
+    hud.displayPaused(ctx);
+  }
+
+  if (transitionState) {
+    hud.displayLevelTransition(ctx, canvas, score, health, level);
+    setTimeout(function() {
+      game.pause(false);
+      transitionState = false;
+    }, 5000);
+  }
+
+  if (gameOver) {
+    hud.displayGameOver(ctx, canvas, score);
+  }
+
+  if (gameWon) {
+    hud.displayGameWon(ctx, canvas, score);
+  }
+}
+
+},{"./bullet_pool":2,"./camera":3,"./enemy":4,"./game":5,"./hud.js":6,"./player":7,"./powerup":8,"./vector":9}],2:[function(require,module,exports){
 "use strict";
 
 /**
@@ -275,7 +489,7 @@ BulletPool.prototype.render = function(elapsedTime, ctx) {
   // Render the bullets as a single path
   ctx.save();
   ctx.beginPath();
-  ctx.fillStyle = "black";
+  ctx.fillStyle = "lightpurple";
   for(var i = 0; i < this.end; i++) {
     ctx.moveTo(this.pool[4*i], this.pool[4*i+1]);
     ctx.arc(this.pool[4*i], this.pool[4*i+1], 2, 0, 2*Math.PI);
@@ -314,7 +528,9 @@ function Camera(screen) {
  * @param {Vector} target what the camera is looking at
  */
 Camera.prototype.update = function(target) {
-  // TODO: Align camera with player
+  if (target.y <= 5400 && target.y >= 600) {
+    this.y = target.y - 600;
+  }
 }
 
 /**
@@ -352,7 +568,84 @@ Camera.prototype.toWorldCoordinates = function(screenCoordinates) {
   return Vector.add(screenCoordinates, this);
 }
 
-},{"./vector":8}],4:[function(require,module,exports){
+},{"./vector":9}],4:[function(require,module,exports){
+"use strict";
+
+const Vector = require('./vector');
+
+module.exports = exports = Enemy;
+
+function Enemy(bullets, position) {
+  this.bullets = bullets;
+  this.velocity = {x: 0, y: 2};
+  var generateX = generateRandomNumber(756, 30);
+  this.position = {x: generateX, y: (position.y - 850)};
+
+  // this.enemyType = generateRandomNumber(5, 1);
+  this.enemyType = 1;
+
+  this.img = new Image();
+
+  switch (this.enemyType) {
+    case 1:
+      this.img.src = 'assets/enemy1.png';
+      break;
+    case 2:
+      this.img.src = 'assets/enemy2.png';
+      break;
+    case 3:
+      this.img.src = 'assets/enemy3.png';
+      break;
+    case 4:
+      this.img.src = 'assets/enemy4.png';
+      break;
+    case 5:
+      this.img.src = 'assets/enemy5.png';
+      break;
+  }
+
+  this.firedBullet = false;
+}
+
+Enemy.prototype.update = function() {
+  this.position.y += this.velocity.y;
+}
+
+Enemy.prototype.render = function(ctx) {
+  ctx.save();
+  ctx.translate(this.position.x, this.position.y);
+  ctx.drawImage(this.img, -24, -24, 48, 48);
+  ctx.restore();
+}
+
+Enemy.prototype.fireBullet = function() {
+  var self = this;
+  if (this.firedBullet == false) {
+    setTimeout(function() {
+      switch(self.enemyType) {
+        case 1:
+          // console.log();
+          var position = Vector.add(self.position, {x: 0, y: 50});
+          var velocity = Vector.scale(Vector.normalize({x: 0, y: self.position.y}), 4);
+          self.bullets.add(position, velocity);
+          self.firedBullet = false;
+          break;
+      }
+      this.firedBullet = true;
+    }, 50);
+  }
+
+}
+
+/**
+  * @function generateRandomNumber
+  * Generates a random number between the given min and max
+  */
+function generateRandomNumber(max, min) {
+  return Math.floor(Math.random() * (max - min)) + min;
+}
+
+},{"./vector":9}],5:[function(require,module,exports){
 "use strict";
 
 /**
@@ -410,89 +703,157 @@ Game.prototype.loop = function(newTime) {
   this.frontCtx.drawImage(this.backBuffer, 0, 0);
 }
 
-},{}],5:[function(require,module,exports){
-"use strict";
-
-/* Classes and Libraries */
-const Vector = require('./vector');
-const SmokeParticles = require('./smoke_particles');
-
-/* Constants */
-const MISSILE_SPEED = 8;
+},{}],6:[function(require,module,exports){
+"use strict;"
 
 /**
- * @module Missile
- * A class representing a player's missile
- */
-module.exports = exports = Missile;
+  * @module exports the Hud class
+  */
+module.exports = exports = Hud;
 
 /**
- * @constructor Missile
- * Creates a missile
- * @param {Vector} position the position of the missile
- * @param {Object} target the target of the missile
- */
-function Missile(position, target) {
-  this.position = {x: position.x, y:position.y}
-  this.target = target;
-  this.angle = 0;
-  this.img = new Image()
-  this.img.src = 'assets/helicopter.png';
-  this.smokeParticles = new SmokeParticles(400);
+  * @constructor Hud
+  * Creates a new hud object
+  */
+function Hud() {}
+
+Hud.prototype.displayHud = function(ctx) {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 760, 1024, 30);
 }
 
 /**
- * @function update
- * Updates the missile, steering it towards a locked
- * target or straight ahead
- * @param {DOMHighResTimeStamp} elapedTime
- */
-Missile.prototype.update = function(elapsedTime) {
+  * @function displayScore
+  * Displays the current score bottom left of canvas
+  */
+Hud.prototype.displayScore = function(ctx, score) {
+  ctx.font = "bold 16px Arial";
+  ctx.fillStyle = "green";
+  var scoreText = "Score: " + score;
+  ctx.fillText(scoreText, 480, 780);
+}
 
-  // set the velocity
-  var velocity = {x: MISSILE_SPEED, y: 0}
-  if(this.target) {
-    var direction = Vector.subtract(this.position, this.target);
-    velocity = Vector.scale(Vector.normalize(direction), MISSILE_SPEED);
+/**
+  * @function displayHealth
+  * Displays the health bottom middle of canvas
+  */
+Hud.prototype.displayHealth = function(ctx, health) {
+  ctx.font = "bold 16px Arial";
+  ctx.fillStyle = "red";
+  var healthText = "Health: ";
+  ctx.fillText(healthText, 10, 780);
+  ctx.fillRect(70, 768, (health * 35), 12);
+}
+
+/**
+  * @function displayLevel
+  * Displays the level number bottom right of canvas
+  */
+Hud.prototype.displayLevel = function(ctx, level) {
+  ctx.font = "bold 16px Arial";
+  ctx.fillStyle = "white";
+  var levelText = "Level: " + (level + 1);
+  ctx.fillText(levelText, 950, 780);
+}
+
+/**
+  * @function displayGUI
+  * Displays the player's coordinates on screen
+  */
+Hud.prototype.displayGUI = function(ctx, position) {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, 55, 40);
+  ctx.font = "bold 12px Arial";
+  ctx.fillStyle = "orange";
+  var coordinatesX = "X: " + Math.ceil(position.x);
+  var coordinatesY = "Y: " + Math.ceil(position.y);
+  ctx.fillText(coordinatesX, 5, 15);
+  ctx.fillText(coordinatesY, 5, 30);
+}
+
+/**
+  * @function displayPaused
+  * Displays pause message middle of screen
+  */
+Hud.prototype.displayPaused = function(ctx) {
+  ctx.font = "bold 32px Arial";
+  ctx.fillStyle = "blue";
+  ctx.fillText("PAUSED", 460, 400);
+}
+
+/**
+  * @function displayGameOver
+  * When game is over, message is displayed over canvas with high score
+  */
+Hud.prototype.displayGameOver = function(ctx, canvas, score) {
+  ctx.fillStyle = "#798187";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.font = "bold 48px Helvetica";
+  ctx.fillStyle = "black";
+
+  var gameOverText = "Game Over!";
+  var scoreText = "Score: " + score;
+  var gameOverHelp = "Press 'Enter' to restart";
+
+  ctx.fillText(gameOverText, 380, 370);
+  ctx.fillText(scoreText, 15, 760);
+  ctx.font = "bold 32px Helvetica";
+  ctx.fillText(gameOverHelp, 340, 410);
+}
+
+/**
+  * @function displayLevelTransition
+  * When level advances, display results from previous level
+  */
+Hud.prototype.displayLevelTransition = function (ctx, canvas, score, health, level) {
+  ctx.fillStyle = "purple";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  var nextLevelText = "Next Level";
+  var scoreText = "Current Score: " + score;
+  var healthText = "Health: ";
+  for (var i = 0; i < health; i++) {
+    healthText += " <3";
   }
+  var levelText = "Level Completed: " + (level + 1);
 
-  // determine missile angle
-  this.angle = Math.atan2(velocity.y, velocity.x);
-
-  // move the missile
-  this.position.x += velocity.x;
-  this.position.y += velocity.y;
-
-  // emit smoke
-  this.smokeParticles.emit(this.position);
-
-  // update smoke
-  this.smokeParticles.update(elapsedTime);
+  ctx.font = "bold 48px Helvetica";
+  ctx.fillStyle = "white";
+  ctx.fillText(nextLevelText, 400, 410);
+  ctx.font = "bold 32px Helvetica";
+  ctx.fillText("RESULTS", 10, 640)
+  ctx.fillText(levelText, 10, 680);
+  ctx.fillText(healthText, 10, 720);
+  ctx.fillText(scoreText, 10, 760);
 }
 
 /**
- * @function render
- * Renders the missile in world coordinates
- * @param {DOMHighResTimeStamp} elapsedTime
- * @param {CanvasRenderingContext2D} ctx
- */
-Missile.prototype.render = function(elapsedTime, ctx) {
-  // Draw Missile
-  ctx.save();
-  ctx.translate(this.position.x, this.position.y);
-  ctx.rotate(this.angle);
-  ctx.drawImage(this.img, 76, 56, 16, 8, 0, -4, 16, 8);
-  ctx.restore();
-  // Draw Smoke
-  this.smokeParticles.render(elapsedTime, ctx);
+  * @function displayGameWon
+  * Displays to the player that game is won
+  */
+Hud.prototype.displayGameWon = function(ctx, canvas, score) {
+  ctx.fillStyle = "#2ECC71";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "bold 48px Helvetica";
+  ctx.fillStyle = "white";
+
+  var winText = "You Win!";
+  var scoreText = "Score: " + score;
+  var winTextHelp = "Press 'Enter' to restart";
+
+  ctx.fillText(winText, 410, 370);
+  ctx.fillText(scoreText, 15, 760);
+  ctx.font = "bold 32px Helvetica";
+  ctx.fillText(winTextHelp, 340, 410);
 }
 
-},{"./smoke_particles":7,"./vector":8}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 "use strict";
 
 /* Classes and Libraries */
 const Vector = require('./vector');
-const Missile = require('./missile');
+// const Missile = require('./missile');
 
 /* Constants */
 const PLAYER_SPEED = 5;
@@ -514,10 +875,11 @@ function Player(bullets, missiles) {
   this.missileCount = 4;
   this.bullets = bullets;
   this.angle = 0;
-  this.position = {x: 200, y: 200};
+  this.position = {x: 525, y: 5400};
   this.velocity = {x: 0, y: 0};
   this.img = new Image()
-  this.img.src = 'assets/tyrian.shp.007D3C.png';
+  // Obtained from http://opengameart.org/content/fighter-ship-elite
+  this.img.src = 'assets/attackship.png';
 }
 
 /**
@@ -549,7 +911,7 @@ Player.prototype.update = function(elapsedTime, input) {
   // don't let the player move off-screen
   if(this.position.x < 0) this.position.x = 0;
   if(this.position.x > 1024) this.position.x = 1024;
-  if(this.position.y > 786) this.position.y = 786;
+  if(this.position.y > 5500) this.position.y = 5500;
 }
 
 /**
@@ -559,10 +921,9 @@ Player.prototype.update = function(elapsedTime, input) {
  * @param {CanvasRenderingContext2D} ctx
  */
 Player.prototype.render = function(elapasedTime, ctx) {
-  var offset = this.angle * 23;
   ctx.save();
   ctx.translate(this.position.x, this.position.y);
-  ctx.drawImage(this.img, 48+offset, 57, 23, 27, -12.5, -12, 23, 27);
+  ctx.drawImage(this.img, -24, -24, 48, 48);
   ctx.restore();
 }
 
@@ -572,7 +933,7 @@ Player.prototype.render = function(elapasedTime, ctx) {
  * @param {Vector} direction
  */
 Player.prototype.fireBullet = function(direction) {
-  var position = Vector.add(this.position, {x:30, y:30});
+  var position = Vector.add(this.position, {x: 0, y: 25});
   var velocity = Vector.scale(Vector.normalize(direction), BULLET_SPEED);
   this.bullets.add(position, velocity);
 }
@@ -591,113 +952,62 @@ Player.prototype.fireMissile = function() {
   }
 }
 
-},{"./missile":5,"./vector":8}],7:[function(require,module,exports){
+},{"./vector":9}],8:[function(require,module,exports){
 "use strict";
 
-/**
- * @module SmokeParticles
- * A class for managing a particle engine that
- * emulates a smoke trail
- */
-module.exports = exports = SmokeParticles;
+module.exports = exports = PowerUp;
 
-/**
- * @constructor SmokeParticles
- * Creates a SmokeParticles engine of the specified size
- * @param {uint} size the maximum number of particles to exist concurrently
- */
-function SmokeParticles(maxSize) {
-  this.pool = new Float32Array(3 * maxSize);
-  this.start = 0;
-  this.end = 0;
-  this.wrapped = false;
-  this.max = maxSize;
+function PowerUp() {
+
+  this.position = {x: 0, y: 0};
+
+  // this.powerUpType = generateRandomNumber(5, 1);
+  this.powerUpType = 1;
+  this.img = new Image();
+
+  switch (this.powerUpType) {
+    case 1:
+      this.img.src = 'assets/powerup1.png';
+      break;
+    case 2:
+      this.img.src = 'assets/powerup2.png';
+      break;
+    case 3:
+      this.img.src = 'assets/powerup3.png';
+      break;
+    case 4:
+      this.img.src = 'assets/powerup4.png';
+      break;
+    case 5:
+      this.img.src = 'assets/powerup5.png';
+      break;
+  }
+
+  this.pickedUp = false;
 }
 
-/**
- * @function emit
- * Adds a new particle at the given position
- * @param {Vector} position
-*/
-SmokeParticles.prototype.emit = function(position) {
-  if(this.end != this.max) {
-    this.pool[3*this.end] = position.x;
-    this.pool[3*this.end+1] = position.y;
-    this.pool[3*this.end+2] = 0.0;
-    this.end++;
-  } else {
-    this.pool[3] = position.x;
-    this.pool[4] = position.y;
-    this.pool[5] = 0.0;
-    this.end = 1;
-  }
-}
-
-/**
- * @function update
- * Updates the particles
- * @param {DOMHighResTimeStamp} elapsedTime
- */
-SmokeParticles.prototype.update = function(elapsedTime) {
-  function updateParticle(i) {
-    this.pool[3*i+2] += elapsedTime;
-    if(this.pool[3*i+2] > 2000) this.start = i;
-  }
-  var i;
-  if(this.wrapped) {
-    for(i = 0; i < this.end; i++){
-      updateParticle.call(this, i);
-    }
-    for(i = this.start; i < this.max; i++){
-      updateParticle.call(this, i);
-    }
-  } else {
-    for(i = this.start; i < this.end; i++) {
-      updateParticle.call(this, i);
-    }
+PowerUp.prototype.update = function(pickedUp) {
+  if (pickedUp) {
+    
   }
 }
 
-/**
- * @function render
- * Renders all bullets in our array.
- * @param {DOMHighResTimeStamp} elapsedTime
- * @param {CanvasRenderingContext2D} ctx
- */
-SmokeParticles.prototype.render = function(elapsedTime, ctx) {
-  function renderParticle(i){
-    var alpha = 1 - (this.pool[3*i+2] / 1000);
-    var radius = 0.1 * this.pool[3*i+2];
-    if(radius > 5) radius = 5;
-    ctx.beginPath();
-    ctx.arc(
-      this.pool[3*i],   // X position
-      this.pool[3*i+1], // y position
-      radius, // radius
-      0,
-      2*Math.PI
-    );
-    ctx.fillStyle = 'rgba(160, 160, 160,' + alpha + ')';
-    ctx.fill();
-  }
-
-  // Render the particles individually
-  var i;
-  if(this.wrapped) {
-    for(i = 0; i < this.end; i++){
-      renderParticle.call(this, i);
-    }
-    for(i = this.start; i < this.max; i++){
-      renderParticle.call(this, i);
-    }
-  } else {
-    for(i = this.start; i < this.end; i++) {
-      renderParticle.call(this, i);
-    }
-  }
+PowerUp.prototype.render = function(ctx) {
+  ctx.save();
+  ctx.translate(this.position.x, this.position.y);
+  ctx.drawImage(this.img, -16, -16, 32, 32);
+  ctx.restore();
 }
 
-},{}],8:[function(require,module,exports){
+/**
+  * @function generateRandomNumber
+  * Generates a random number between the given min and max
+  */
+function generateRandomNumber(max, min) {
+  return Math.floor(Math.random() * (max - min)) + min;
+}
+
+},{}],9:[function(require,module,exports){
 "use strict";
 
 /**

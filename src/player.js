@@ -2,7 +2,7 @@
 
 /* Classes and Libraries */
 const Vector = require('./vector');
-const Missile = require('./missile');
+// const Missile = require('./missile');
 
 /* Constants */
 const PLAYER_SPEED = 5;
@@ -24,10 +24,11 @@ function Player(bullets, missiles) {
   this.missileCount = 4;
   this.bullets = bullets;
   this.angle = 0;
-  this.position = {x: 200, y: 200};
+  this.position = {x: 525, y: 5400};
   this.velocity = {x: 0, y: 0};
   this.img = new Image()
-  this.img.src = 'assets/tyrian.shp.007D3C.png';
+  // Obtained from http://opengameart.org/content/fighter-ship-elite
+  this.img.src = 'assets/attackship.png';
 }
 
 /**
@@ -59,7 +60,7 @@ Player.prototype.update = function(elapsedTime, input) {
   // don't let the player move off-screen
   if(this.position.x < 0) this.position.x = 0;
   if(this.position.x > 1024) this.position.x = 1024;
-  if(this.position.y > 786) this.position.y = 786;
+  if(this.position.y > 5500) this.position.y = 5500;
 }
 
 /**
@@ -69,10 +70,9 @@ Player.prototype.update = function(elapsedTime, input) {
  * @param {CanvasRenderingContext2D} ctx
  */
 Player.prototype.render = function(elapasedTime, ctx) {
-  var offset = this.angle * 23;
   ctx.save();
   ctx.translate(this.position.x, this.position.y);
-  ctx.drawImage(this.img, 48+offset, 57, 23, 27, -12.5, -12, 23, 27);
+  ctx.drawImage(this.img, -24, -24, 48, 48);
   ctx.restore();
 }
 
@@ -82,7 +82,7 @@ Player.prototype.render = function(elapasedTime, ctx) {
  * @param {Vector} direction
  */
 Player.prototype.fireBullet = function(direction) {
-  var position = Vector.add(this.position, {x:30, y:30});
+  var position = Vector.add(this.position, {x: 0, y: 25});
   var velocity = Vector.scale(Vector.normalize(direction), BULLET_SPEED);
   this.bullets.add(position, velocity);
 }
